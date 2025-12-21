@@ -1,20 +1,40 @@
-from aiogram import Bot, Dispatcher, types
-import asyncio
 import os
+import asyncio
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties
+from aiogram import F
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "@tajalnijomnjf"
-CAPTION = "وصول بضاعه جديدة داخل الشركة متوفرة الان بكميات محدودة"
+CAPTION = "وصول بضاعة جديدة داخل الشركة متوفرة الان بكميات محدودة ✨"
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=TOKEN,
+    default=DefaultBotProperties(parse_mode="HTML")
+)
+
 dp = Dispatcher()
 
-@dp.message()
-async def receive(msg: types.Message):
-    if msg.photo:
-        await bot.send_photo(CHANNEL, msg.photo[-1].file_id, CAPTION)
-        await msg.answer("تم النشر تلقائياً 🟢")
+@dp.message(F.photo)
+async def receive_photo(message: types.Message):
+    try:
+        await bot.send_photo(
+            chat_id=CHANNEL,
+            photo=message.photo[-1].file_id,
+            caption=CAPTION
+        )
+        await message.answer("✔️ تم نشر الصورة في القناة")
+    except Exception as e:
+        await message.answer(f"❌ حدث خطأ أثناء النشر\n{e}")
 
-    elif msg.text == "نشر الآن":
-        await bot.send_message(CHANNEL, CAPTION)
-        await msg.answer("تم النشر بنجاح ✔")
+@dp.message(F.text == "نشر الآن")
+async def post_now(message: types.Message):
+    await bot.send_message(CHANNEL, CAPTION)
+    await message.answer("✔️ تم نشر الرسالة الآن في القناة")
+
+async def start_bot():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(start_bot())
