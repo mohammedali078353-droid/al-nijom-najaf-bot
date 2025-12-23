@@ -1,137 +1,63 @@
-import os
-import logging
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-)
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# ================== إعدادات عامة ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")  # مثال: @tajalnijomnjf
-FIXED_CAPTION = os.getenv(
-    "CAPTION_FIXED",
-    "وصول بضاعة جديدة داخل الشركة متوفرة الان بكميات محدودة"
+TOKEN = "ضع_التوكن_مالتك_هنا"
+CHANNEL = "@tajalnijomnjf"
+
+# الكيبورد
+keyboard = ReplyKeyboardMarkup(
+    [
+        ["📤 نشر الآن"],
+        ["📊 حالة البوت", "⏳ المنشورات المجدولة"]
+    ],
+    resize_keyboard=True
 )
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-
-# ================== استقبال صورة / فيديو ==================
-async def receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
-    if message.photo:
-        file_id = message.photo[-1].file_id
-        media_type = "photo"
-    elif message.video:
-        file_id = message.video.file_id
-        media_type = "video"
-    else:
-        await message.reply_text("❌ الرجاء إرسال صورة أو فيديو فقط.")
-        return
-
-    caption = message.caption or ""
-    final_caption = f"{caption}\n\n{FIXED_CAPTION}"
-
-    context.user_data.clear()
-    context.user_data.update({
-        "file_id": file_id,
-        "media_type": media_type,
-        "caption": final_caption
-    })
-
-    keyboard = [
-        [
-            InlineKeyboardButton("▶️ نشر الآن", callback_data="publish_now"),
-            InlineKeyboardButton("🔁 إعادة نشر (5 أيام)", callback_data="repost_5"),
-        ],
-        [
-            InlineKeyboardButton("📦 البضاعة نفدت", callback_data="sold_out"),
-            InlineKeyboardButton("❌ إلغاء", callback_data="cancel"),
-        ],
-    ]
-
-    await message.reply_text(
-        "📌 اختر الإجراء المطلوب:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 أهلاً بك\nاختر الأمر من الأزرار 👇",
+        reply_markup=keyboard
     )
 
-# ================== أزرار التحكم ==================
-async def buttons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-    if data == "publish_now":
-        await publish_to_channel(query, context)
+    if text == "📤 نشر الآن" or text == "انشر الان":
+        if context.user_data.get("last_photo"):
+            await context.bot.send_photo(
+                chat_id=CHANNEL,
+                photo=context.user_data["last_photo"],
+                caption=context.user_data.get(
+                    "caption",
+                    "وصول بضاعه جديدة داخل الشركة متوفرة الان بكميات محدودة"
+                )
+            )
+            await update.message.reply_text("✅ تم النشر بنجاح", reply_markup=keyboard)
+        else:
+            await update.message.reply_text("❌ ماكو صورة محفوظة للنشر", reply_markup=keyboard)
 
-    elif data == "repost_5":
-        context.user_data["repost"] = True
-        await query.edit_message_text(
-            "🔁 تم تفعيل إعادة النشر بعد 5 أيام.\n"
-            "اضغط (نشر الآن) لإرسال المنشور."
-        )
+    elif text == "📊 حالة البوت":
+        await update.message.reply_text("🟢 البوت يعمل بشكل طبيعي", reply_markup=keyboard)
 
-    elif data == "sold_out":
-        context.user_data.clear()
-        await query.edit_message_text("📦 تم إيقاف المنشور بسبب نفاد الكمية.")
+    elif text == "⏳ المنشورات المجدولة":
+        await update.message.reply_text("📭 حالياً لا توجد منشورات مجدولة", reply_markup=keyboard)
 
-    elif data == "cancel":
-        context.user_data.clear()
-        await query.edit_message_text("❌ تم إلغاء العملية.")
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1].file_id
+    caption = update.message.caption
 
-# ================== النشر بالقناة ==================
-async def publish_to_channel(query, context: ContextTypes.DEFAULT_TYPE):
-    data = context.user_data
-    if not data:
-        await query.edit_message_text("❌ لا يوجد منشور جاهز للنشر.")
-        return
+    context.user_data["last_photo"] = photo
+    context.user_data["caption"] = caption
 
-    bot = context.bot
-    media_type = data["media_type"]
-    file_id = data["file_id"]
-    caption = data["caption"]
+    await update.message.reply_text(
+        "📸 تم استلام الصورة\nاختر من الأزرار 👇",
+        reply_markup=keyboard
+    )
 
-    if media_type == "photo":
-        await bot.send_photo(
-            chat_id=CHANNEL_USERNAME,
-            photo=file_id,
-            caption=caption,
-        )
-    elif media_type == "video":
-        await bot.send_video(
-            chat_id=CHANNEL_USERNAME,
-            video=file_id,
-            caption=caption,
-        )
+app = ApplicationBuilder().token(TOKEN).build()
 
-    await query.edit_message_text("✅ تم النشر بنجاح في القناة.")
-    context.user_data.clear()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# ================== تشغيل البوت ==================
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("❌ BOT_TOKEN غير موجود في Environment Variables")
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, receive_media))
-    app.add_handler(CallbackQueryHandler(buttons_handler))
-
-    print("🤖 Bot is running...")
-    app.run_polling(close_loop=False)
-
-if __name__ == "__main__":
-    main()
+app.run_polling()
