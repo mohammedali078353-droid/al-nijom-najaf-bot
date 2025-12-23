@@ -1,13 +1,21 @@
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 import asyncio
 import random
 import re
 from datetime import datetime, timedelta
 
+# ================== الإعدادات ==================
 TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
 CHANNEL = "@tajalnijomnjf"
 
+# ================== كابشنات تلقائية ==================
 AUTO_CAPTIONS = [
     "وصول بضاعة جديدة وبمواصفات عالية، متوفرة الآن وبكميات محدودة.",
     "منتج عملي بجودة مضمونة، مناسب للاستخدام اليومي وبسعر منافس.",
@@ -23,22 +31,24 @@ AUTO_CAPTIONS = [
     "أداء ثابت، جودة عالية، وسعر يناسب الجميع.",
     "اختيار مثالي للباحثين عن الاعتمادية والكفاءة.",
     "منتج معتمد ومجرب، متوفر الآن داخل مخازن الشركة.",
-    "نلتزم بتوفير منتجات تلبي متطلبات السوق وبأفضل جودة."
+    "نلتزم بتوفير منتجات تلبي متطلبات السوق وبأفضل جودة.",
 ]
 
+# ================== الأزرار ==================
 keyboard = ReplyKeyboardMarkup(
     [
         ["📤 نشر الآن", "⏰ جدولة"],
-        ["📊 حالة البوت", "⏳ المنشورات المجدولة"]
+        ["📊 حالة البوت", "⏳ المنشورات المجدولة"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
+# ================== التخزين ==================
 scheduled_posts = []
 
+# ================== تحليل الوقت ==================
 def parse_time(text: str):
     now = datetime.now()
-
     if not text:
         return None
 
@@ -67,6 +77,7 @@ def parse_time(text: str):
 
     return None
 
+# ================== المجدول ==================
 async def scheduler(app):
     while True:
         now = datetime.now()
@@ -75,72 +86,113 @@ async def scheduler(app):
                 await app.bot.send_photo(
                     chat_id=CHANNEL,
                     photo=post["photo"],
-                    caption=post["caption"]
+                    caption=post["caption"],
                 )
                 scheduled_posts.remove(post)
         await asyncio.sleep(10)
 
+async def post_init(application):
+    application.create_task(scheduler(application))
+
+# ================== الأوامر ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 البوت جاهز للعمل", reply_markup=keyboard)
+    await update.message.reply_text(
+        "🤖 البوت جاهز للعمل\nاختر من الأزرار 👇",
+        reply_markup=keyboard,
+    )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["photo"] = update.message.photo[-1].file_id
 
-    if update.message.caption:
+    if update.message.caption and update.message.caption.strip():
         context.user_data["caption"] = update.message.caption
+        context.user_data["caption_type"] = "user"
     else:
         context.user_data["caption"] = random.choice(AUTO_CAPTIONS)
+        context.user_data["caption_type"] = "auto"
 
-    await update.message.reply_text("📸 تم حفظ الصورة\nاختر نشر الآن أو جدولة ⏰", reply_markup=keyboard)
+    await update.message.reply_text(
+        "📸 تم استلام الصورة\nاختر نشر الآن أو جدولة ⏰",
+        reply_markup=keyboard,
+    )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
+    # نشر الآن
     if text == "📤 نشر الآن":
         if "photo" not in context.user_data:
-            await update.message.reply_text("❌ ماكو صورة", reply_markup=keyboard)
+            await update.message.reply_text("❌ ماكو صورة جاهزة", reply_markup=keyboard)
             return
 
         await context.bot.send_photo(
             chat_id=CHANNEL,
             photo=context.user_data["photo"],
-            caption=context.user_data["caption"]
+            caption=context.user_data["caption"],
+        )
+
+        caption_info = (
+            "✍️ كابشنك"
+            if context.user_data.get("caption_type") == "user"
+            else "🤖 كابشن تلقائي"
         )
 
         context.user_data.clear()
-        await update.message.reply_text("✅ تم النشر بنجاح", reply_markup=keyboard)
+        await update.message.reply_text(
+            f"✅ تم النشر بنجاح\n{caption_info}",
+            reply_markup=keyboard,
+        )
+        return
 
-    elif text == "⏰ جدولة":
+    # طلب جدولة
+    if text == "⏰ جدولة":
         await update.message.reply_text("✍️ اكتب الوقت بأي صيغة")
+        return
 
-    elif "photo" in context.user_data:
+    # إدخال وقت للجدولة
+    if "photo" in context.user_data:
         t = parse_time(text)
         if t:
-            scheduled_posts.append({
-                "photo": context.user_data["photo"],
-                "caption": context.user_data["caption"],
-                "time": t
-            })
+            scheduled_posts.append(
+                {
+                    "photo": context.user_data["photo"],
+                    "caption": context.user_data["caption"],
+                    "time": t,
+                }
+            )
             context.user_data.clear()
-            await update.message.reply_text(f"⏰ تم الجدولة: {t.strftime('%H:%M')}", reply_markup=keyboard)
+            await update.message.reply_text(
+                f"⏰ تم جدولة النشر على {t.strftime('%H:%M')}",
+                reply_markup=keyboard,
+            )
+            return
 
-    elif text == "📊 حالة البوت":
+    # حالة البوت
+    if text == "📊 حالة البوت":
         await update.message.reply_text("🟢 البوت يعمل بشكل طبيعي", reply_markup=keyboard)
+        return
 
-    elif text == "⏳ المنشورات المجدولة":
+    # عرض المجدول
+    if text == "⏳ المنشورات المجدولة":
         if not scheduled_posts:
             await update.message.reply_text("📭 لا توجد منشورات مجدولة", reply_markup=keyboard)
         else:
-            msg = "⏳ المجدول:\n"
+            msg = "⏳ المنشورات المجدولة:\n"
             for p in scheduled_posts:
                 msg += f"- {p['time'].strftime('%H:%M')}\n"
             await update.message.reply_text(msg, reply_markup=keyboard)
+        return
 
-app = ApplicationBuilder().token(TOKEN).build()
+# ================== التشغيل ==================
+app = (
+    ApplicationBuilder()
+    .token(TOKEN)
+    .post_init(post_init)
+    .build()
+)
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-app.create_task(scheduler(app))
 app.run_polling()
