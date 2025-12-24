@@ -4,215 +4,147 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
-from datetime import datetime
-import hashlib
-import random
+import asyncio
+import re
+from datetime import datetime, timedelta
 
 # ================== الإعدادات ==================
 TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
 CHANNEL = "@tajalnijomnjf"
 ADMIN_ID = 304764998
 
-# ================== تخزين ==================
-last_media = {}   # يخزن آخر صورة/فيديو لكل مستخدم
-sent_hashes = set()
+# ================== كابشن ثابت ==================
+FIXED_CAPTION = "وصول بضاعه جديدة داخل الشركة متوفرة الان بكميات محدودة"
 
-# ================== كابشنات احتياطية ==================
-AUTO_CAPTIONS = [
-    "وصول بضاعة جديدة داخل الشركة متوفرة الآن وبكميات محدودة.",
-    "منتج عملي بجودة عالية ومتوفر حاليًا داخل الشركة.",
-    "خيار مثالي للاستخدام العملي وبسعر منافس.",
-    "متوفر الآن – جودة مضمونة وتسليم فوري.",
-]
-
-def get_caption(caption):
-    if caption:
-        return caption.strip()
-    return random.choice(AUTO_CAPTIONS)
-
-def hash_bytes(data: bytes):
-    return hashlib.md5(data).hexdigest()
-
-# ================== الكيبورد الثابت ==================
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        ["🚀 نشر الآن", "⏰ انشر بعد دقيقة"],
-        ["📊 تقرير فوري"]
-    ],
+# ================== كيبورد ==================
+keyboard = ReplyKeyboardMarkup(
+    [["📤 نشر الآن", "⏰ جدولة"]],
     resize_keyboard=True
 )
 
-# ================== أوامر ==================
+# ================== بدء البوت ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["photos"] = []
     await update.message.reply_text(
-        "🤖 بوت النشر شغّال\n"
-        "أرسل صورة أو فيديو ثم اضغط 🚀 نشر الآن",
-        reply_markup=MAIN_KEYBOARD
+        "👋 أهلاً بك\n\n"
+        "📸 أرسل الصور الآن\n"
+        "⏰ أو حدد وقت بالنص مثل: 5:30\n"
+        "📤 أو اضغط (نشر الآن)",
+        reply_markup=keyboard
     )
 
-# ================== استقبال صورة ==================
+# ================== استقبال الصور ==================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    data = await file.download_as_bytearray()
-    h = hash_bytes(data)
+    photo = update.message.photo[-1].file_id
 
-    if h in sent_hashes:
-        await update.message.reply_text(
-            "⚠️ هذه الصورة نُشرت سابقًا",
-            reply_markup=MAIN_KEYBOARD
-        )
-        return
+    if "photos" not in context.user_data:
+        context.user_data["photos"] = []
 
-    caption = get_caption(update.message.caption)
-
-    last_media[update.message.from_user.id] = {
-        "type": "photo",
-        "file_id": photo.file_id,
-        "caption": caption,
-        "hash": h
-    }
+    context.user_data["photos"].append(photo)
 
     await update.message.reply_text(
-        "✅ تم حفظ الصورة\nاضغط 🚀 نشر الآن",
-        reply_markup=MAIN_KEYBOARD
+        f"✅ تم استلام الصورة ({len(context.user_data['photos'])})"
     )
 
-# ================== استقبال فيديو ==================
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    caption = get_caption(update.message.caption)
-
-    last_media[update.message.from_user.id] = {
-        "type": "video",
-        "file_id": update.message.video.file_id,
-        "caption": caption,
-        "hash": None
-    }
-
-    await update.message.reply_text(
-        "✅ تم حفظ الفيديو\nاضغط 🚀 نشر الآن",
-        reply_markup=MAIN_KEYBOARD
-    )
-
-# ================== نشر المحتوى ==================
+# ================== نشر الآن ==================
 async def publish_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
+    photos = context.user_data.get("photos", [])
 
-    if uid not in last_media:
-        await update.message.reply_text(
-            "❌ ماكو محتوى محفوظ للنشر",
-            reply_markup=MAIN_KEYBOARD
-        )
+    if not photos:
+        await update.message.reply_text("❌ لم يتم استلام أي صور")
         return
 
-    media = last_media.pop(uid)
-
-    if media["type"] == "photo":
+    for photo in photos:
         await context.bot.send_photo(
             chat_id=CHANNEL,
-            photo=media["file_id"],
-            caption=media["caption"]
+            photo=photo,
+            caption=FIXED_CAPTION
         )
-        sent_hashes.add(media["hash"])
-
-    elif media["type"] == "video":
-        await context.bot.send_video(
-            chat_id=CHANNEL,
-            video=media["file_id"],
-            caption=media["caption"]
-        )
+        await asyncio.sleep(1)
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=(
-            "📢 تم نشر محتوى\n"
-            f"👤 بواسطة: {update.message.from_user.full_name}\n"
-            f"🕒 {datetime.now().strftime('%H:%M:%S')}"
-        )
+        text=f"✅ تم نشر {len(photos)} صورة بنجاح"
     )
 
-    await update.message.reply_text(
-        "✅ تم النشر بنجاح",
-        reply_markup=MAIN_KEYBOARD
-    )
+    context.user_data["photos"].clear()
 
-# ================== نشر بعد دقيقة ==================
-async def publish_after_minute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
+    await update.message.reply_text("✅ تم النشر بنجاح")
 
-    if uid not in last_media:
-        await update.message.reply_text(
-            "❌ ماكو محتوى محفوظ",
-            reply_markup=MAIN_KEYBOARD
-        )
-        return
-
-    await update.message.reply_text(
-        "⏳ سيتم النشر بعد دقيقة",
-        reply_markup=MAIN_KEYBOARD
-    )
-
-    await context.job_queue.run_once(
-        callback=scheduled_publish,
-        when=60,
-        data={"uid": uid, "chat_id": update.message.chat_id}
-    )
-
-async def scheduled_publish(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job.data
-    uid = job["uid"]
-
-    if uid not in last_media:
-        return
-
-    media = last_media.pop(uid)
-
-    if media["type"] == "photo":
-        await context.bot.send_photo(
-            chat_id=CHANNEL,
-            photo=media["file_id"],
-            caption=media["caption"]
-        )
-        sent_hashes.add(media["hash"])
-    else:
-        await context.bot.send_video(
-            chat_id=CHANNEL,
-            video=media["file_id"],
-            caption=media["caption"]
-        )
-
-# ================== تقرير فوري ==================
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📊 البوت شغّال والنظام مستقر",
-        reply_markup=MAIN_KEYBOARD
-    )
-
-# ================== النصوص ==================
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================== جدولة ==================
+async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "🚀 نشر الآن":
-        await publish_now(update, context)
-    elif text == "⏰ انشر بعد دقيقة":
-        await publish_after_minute(update, context)
-    elif text == "📊 تقرير فوري":
-        await report(update, context)
-    else:
-        await update.message.reply_text(
-            "ℹ️ أرسل صورة أو فيديو ثم استخدم الأزرار",
-            reply_markup=MAIN_KEYBOARD
+    match = re.search(r'(\d{1,2}):(\d{2})', text)
+    if not match:
+        await update.message.reply_text("❌ اكتب الوقت مثل 5:30")
+        return
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+
+    now = datetime.now()
+    publish_time = now.replace(hour=hour, minute=minute, second=0)
+
+    if publish_time < now:
+        publish_time += timedelta(days=1)
+
+    delay = (publish_time - now).total_seconds()
+
+    photos = context.user_data.get("photos", [])
+
+    if not photos:
+        await update.message.reply_text("❌ لا توجد صور مجدولة")
+        return
+
+    await update.message.reply_text(
+        f"⏰ تم جدولة {len(photos)} صورة\n"
+        f"🕒 وقت النشر: {publish_time.strftime('%H:%M')}"
+    )
+
+    asyncio.create_task(publish_later(context, photos.copy(), delay))
+
+    context.user_data["photos"].clear()
+
+# ================== نشر مؤجل ==================
+async def publish_later(context, photos, delay):
+    await asyncio.sleep(delay)
+
+    for photo in photos:
+        await context.bot.send_photo(
+            chat_id=CHANNEL,
+            photo=photo,
+            caption=FIXED_CAPTION
         )
+        await asyncio.sleep(1)
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"⏰ تم نشر {len(photos)} صورة مجدولة بنجاح"
+    )
+
+# ================== أوامر نصية ==================
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if "نشر" in text:
+        await publish_now(update, context)
+    elif re.search(r'\d{1,2}:\d{2}', text):
+        await schedule_handler(update, context)
 
 # ================== تشغيل البوت ==================
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-app.add_handler(MessageHandler(filters.VIDEO, handle_video))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-print("🤖 Bot is running...")
-app.run_polling()
+    print("✅ البوت يعمل بنجاح...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
