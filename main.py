@@ -1,197 +1,202 @@
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
-    filters,
+    filters
 )
-import asyncio
-import random
-import re
 from datetime import datetime, timedelta
+import re
 
 # ================== الإعدادات ==================
 TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
 CHANNEL = "@tajalnijomnjf"
+
+# ✅ ADMIN ID (محفوظ ومعتمد)
 ADMIN_ID = 304764998
 
-# ================== كابشنات تلقائية ==================
-AUTO_CAPTIONS = [
-    "وصول بضاعة جديدة وبمواصفات عالية، متوفرة الآن وبكميات محدودة.",
-    "منتج عملي بجودة مضمونة، مناسب للاستخدام اليومي وبسعر منافس.",
-    "الاختيار الأمثل لأصحاب العمل الباحثين عن الجودة والاعتمادية.",
-    "متوفر الآن داخل الشركة، جودة عالية تلبي جميع الاحتياجات.",
-    "منتج مميز يجمع بين القوة والكفاءة، جاهز للتسليم الفوري.",
-    "حل عملي وموثوق لأصحاب المشاريع والمحلات التجارية.",
-]
+AUTO_CAPTION = "وصول بضاعة جديدة داخل الشركة متوفرة الان بكميات محدودة"
 
-# ================== الأزرار ==================
-keyboard = ReplyKeyboardMarkup(
-    [
-        ["📤 نشر الآن", "⏰ جدولة"],
-        ["📊 حالة البوت", "⏳ المنشورات المجدولة"],
-    ],
-    resize_keyboard=True,
-)
+TOTAL_POSTS = 0
 
-# ================== التخزين المؤقت ==================
-scheduled_posts = []
+# ================== استخراج الوقت ==================
+def extract_time(text):
+    match = re.search(r'(\d{1,2})[:٫](\d{2})', text)
+    if not match:
+        return None
 
-# ================== تحليل الوقت ==================
-def parse_time(text: str):
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+
     now = datetime.now()
-    text = text.lower()
+    publish_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-    m = re.search(r"بعد\s+(\d+)\s*دقيقة", text)
-    if m:
-        return now + timedelta(minutes=int(m.group(1)))
+    if publish_time < now:
+        publish_time += timedelta(days=1)
 
-    if "بعد ساعة" in text:
-        return now + timedelta(hours=1)
+    return publish_time
 
-    m = re.search(r"(\d{1,2}):(\d{2})", text)
-    if m:
-        h, mi = int(m.group(1)), int(m.group(2))
-        return now.replace(hour=h, minute=mi, second=0)
+# ================== إرسال تقرير ==================
+async def send_report(context, user, post_type, caption, method):
+    global TOTAL_POSTS
+    TOTAL_POSTS += 1
 
-    return None
+    name = user.full_name
+    username = f"@{user.username}" if user.username else "بدون معرف"
+    time_now = datetime.now().strftime("%H:%M")
 
-# ================== المجدول (Scheduler) ==================
-async def scheduler(app):
-    while True:
-        now = datetime.now()
-        for post in scheduled_posts[:]:
-            if now >= post["time"]:
-                if len(post["photos"]) == 1:
-                    await app.bot.send_photo(
-                        chat_id=CHANNEL,
-                        photo=post["photos"][0],
-                        caption=post["caption"],
-                    )
-                else:
-                    media = [{"type": "photo", "media": p} for p in post["photos"]]
-                    media[0]["caption"] = post["caption"]
-                    await app.bot.send_media_group(CHANNEL, media)
-
-                await app.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=(
-                        "⏰ تم النشر حسب الجدولة\n"
-                        f"🖼️ عدد الصور: {len(post['photos'])}\n"
-                        f"🕒 وقت النشر: {datetime.now().strftime('%H:%M')}"
-                    ),
-                )
-
-                scheduled_posts.remove(post)
-        await asyncio.sleep(10)
-
-async def post_init(application):
-    application.create_task(scheduler(application))
-
-# ================== الأوامر ==================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 البوت جاهز للعمل\nاختر من الأزرار 👇",
-        reply_markup=keyboard,
+    text = (
+        "📢 تقرير نشر جديد\n\n"
+        f"👤 الناشر: {name}\n"
+        f"🔖 المعرف: {username}\n"
+        f"🗂️ النوع: {'صورة' if post_type == 'photo' else 'فيديو'}\n"
+        f"🚀 طريقة النشر: {method}\n"
+        f"🕒 وقت النشر: {time_now}\n"
+        f"🔢 العدد الكلي للمنشورات: {TOTAL_POSTS}\n\n"
+        f"📝 الكابشن:\n{caption}"
     )
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photos = context.user_data.get("photos", [])
-    photos.append(update.message.photo[-1].file_id)
-    context.user_data["photos"] = photos
-
-    if update.message.caption and update.message.caption.strip():
-        context.user_data["caption"] = update.message.caption
-    else:
-        context.user_data["caption"] = random.choice(AUTO_CAPTIONS)
-
-    await update.message.reply_text(
-        f"📸 تم استلام الصورة ({len(photos)})\nاختر نشر الآن أو جدولة ⏰",
-        reply_markup=keyboard,
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=text
     )
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# ================== مهمة النشر المجدول ==================
+async def publish_job(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
+    user = data["user"]
 
-    # نشر الآن
-    if text == "📤 نشر الآن":
-        photos = context.user_data.get("photos")
-        if not photos:
-            await update.message.reply_text("❌ ماكو صور جاهزة", reply_markup=keyboard)
-            return
+    try:
+        if data["type"] == "photo":
+            await context.bot.send_photo(
+                chat_id=CHANNEL,
+                photo=data["file_id"],
+                caption=data["caption"]
+            )
 
-        caption = context.user_data["caption"]
+        elif data["type"] == "video":
+            await context.bot.send_video(
+                chat_id=CHANNEL,
+                video=data["file_id"],
+                caption=data["caption"]
+            )
 
-        if len(photos) == 1:
-            await context.bot.send_photo(CHANNEL, photos[0], caption=caption)
-        else:
-            media = [{"type": "photo", "media": p} for p in photos]
-            media[0]["caption"] = caption
-            await context.bot.send_media_group(CHANNEL, media)
-
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "📤 تم النشر الفوري\n"
-                f"🖼️ عدد الصور: {len(photos)}\n"
-                f"🕒 وقت النشر: {datetime.now().strftime('%H:%M')}"
-            ),
+        await send_report(
+            context,
+            user,
+            data["type"],
+            data["caption"],
+            "جدولة"
         )
 
-        context.user_data.clear()
-        await update.message.reply_text("✅ تم النشر بنجاح", reply_markup=keyboard)
+    except Exception as e:
+        print("❌ خطأ بالنشر المجدول:", e)
+
+# ================== استقبال صورة / فيديو ==================
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    caption = message.caption or AUTO_CAPTION
+    publish_time = extract_time(caption)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 نشر الآن", callback_data="publish_now")]
+    ])
+
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        media_type = "photo"
+
+    elif message.video:
+        file_id = message.video.file_id
+        media_type = "video"
+
+    else:
         return
 
-    # طلب جدولة
-    if text == "⏰ جدولة":
-        await update.message.reply_text("✍️ اكتب وقت النشر بأي صيغة")
+    post_data = {
+        "type": media_type,
+        "file_id": file_id,
+        "caption": caption,
+        "user": message.from_user
+    }
+
+    context.bot_data["pending_post"] = post_data
+
+    if publish_time:
+        context.job_queue.run_once(
+            publish_job,
+            publish_time,
+            data=post_data
+        )
+
+        await message.reply_text(
+            f"✅ تم جدولة المنشور\n⏰ وقت النشر: {publish_time.strftime('%H:%M')}",
+            reply_markup=keyboard
+        )
+    else:
+        await message.reply_text(
+            "⚠️ لم يتم العثور على وقت في الكابشن\nاضغط (نشر الآن)",
+            reply_markup=keyboard
+        )
+
+# ================== زر نشر الآن ==================
+async def publish_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if "pending_post" not in context.bot_data:
+        await query.edit_message_text("❌ لا يوجد منشور جاهز.")
         return
 
-    # إدخال وقت الجدولة
-    if "photos" in context.user_data:
-        t = parse_time(text)
-        if t:
-            scheduled_posts.append(
-                {
-                    "photos": context.user_data["photos"],
-                    "caption": context.user_data["caption"],
-                    "time": t,
-                }
+    post = context.bot_data.pop("pending_post")
+
+    try:
+        if post["type"] == "photo":
+            await context.bot.send_photo(
+                chat_id=CHANNEL,
+                photo=post["file_id"],
+                caption=post["caption"]
             )
-            context.user_data.clear()
-            await update.message.reply_text(
-                f"⏰ تم جدولة النشر على {t.strftime('%H:%M')}",
-                reply_markup=keyboard,
+
+        elif post["type"] == "video":
+            await context.bot.send_video(
+                chat_id=CHANNEL,
+                video=post["file_id"],
+                caption=post["caption"]
             )
-            return
 
-    # حالة البوت
-    if text == "📊 حالة البوت":
-        await update.message.reply_text("🟢 البوت يعمل بشكل طبيعي", reply_markup=keyboard)
-        return
+        await send_report(
+            context,
+            query.from_user,
+            post["type"],
+            post["caption"],
+            "نشر فوري"
+        )
 
-    # عرض المجدول
-    if text == "⏳ المنشورات المجدولة":
-        if not scheduled_posts:
-            await update.message.reply_text("📭 لا توجد منشورات مجدولة", reply_markup=keyboard)
-        else:
-            msg = "⏳ المنشورات المجدولة:\n"
-            for p in scheduled_posts:
-                msg += f"- {p['time'].strftime('%H:%M')} ({len(p['photos'])} صور)\n"
-            await update.message.reply_text(msg, reply_markup=keyboard)
-        return
+        await query.edit_message_text("✅ تم النشر الآن بنجاح.")
+
+    except Exception as e:
+        await query.edit_message_text(f"❌ فشل النشر:\n{e}")
 
 # ================== التشغيل ==================
-app = (
-    ApplicationBuilder()
-    .token(TOKEN)
-    .post_init(post_init)
-    .build()
-)
+def main():
+    application = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(
+        MessageHandler(filters.PHOTO | filters.VIDEO, handle_media)
+    )
 
-app.run_polling()
+    application.add_handler(
+        CallbackQueryHandler(publish_now_callback, pattern="^publish_now$")
+    )
+
+    print("🤖 البوت يعمل الآن...")
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
