@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 # ================== الإعدادات ==================
 TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
 CHANNEL = "@tajalnijomnjf"
+ADMIN_ID = 304764998
 
 # ================== كابشنات تلقائية ==================
 AUTO_CAPTIONS = [
@@ -22,16 +23,7 @@ AUTO_CAPTIONS = [
     "الاختيار الأمثل لأصحاب العمل الباحثين عن الجودة والاعتمادية.",
     "متوفر الآن داخل الشركة، جودة عالية تلبي جميع الاحتياجات.",
     "منتج مميز يجمع بين القوة والكفاءة، جاهز للتسليم الفوري.",
-    "نوفر لكم أفضل الحلول العملية بأفضل الأسعار في السوق.",
-    "متوفر بكميات محدودة مع إمكانية التجهيز السريع.",
-    "جودة مضمونة وتجربة موثوقة، خيارك الأفضل للعمل المتواصل.",
-    "منتج مصمم ليدوم، مناسب للأعمال الشاقة والاستخدام الطويل.",
     "حل عملي وموثوق لأصحاب المشاريع والمحلات التجارية.",
-    "متوفر حالياً مع عروض خاصة للكميات الكبيرة.",
-    "أداء ثابت، جودة عالية، وسعر يناسب الجميع.",
-    "اختيار مثالي للباحثين عن الاعتمادية والكفاءة.",
-    "منتج معتمد ومجرب، متوفر الآن داخل مخازن الشركة.",
-    "نلتزم بتوفير منتجات تلبي متطلبات السوق وبأفضل جودة.",
 ]
 
 # ================== الأزرار ==================
@@ -43,51 +35,54 @@ keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# ================== التخزين ==================
+# ================== التخزين المؤقت ==================
 scheduled_posts = []
 
 # ================== تحليل الوقت ==================
 def parse_time(text: str):
     now = datetime.now()
-    if not text:
-        return None
-
     text = text.lower()
 
-    # بعد X دقيقة
     m = re.search(r"بعد\s+(\d+)\s*دقيقة", text)
     if m:
         return now + timedelta(minutes=int(m.group(1)))
 
-    # بعد ساعة
     if "بعد ساعة" in text:
         return now + timedelta(hours=1)
 
-    # hh:mm
     m = re.search(r"(\d{1,2}):(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
         return now.replace(hour=h, minute=mi, second=0)
 
-    # رقم فقط (ساعة)
-    m = re.search(r"\b(\d{1,2})\b", text)
-    if m:
-        h = int(m.group(1))
-        return now.replace(hour=h, minute=0, second=0)
-
     return None
 
-# ================== المجدول ==================
+# ================== المجدول (Scheduler) ==================
 async def scheduler(app):
     while True:
         now = datetime.now()
         for post in scheduled_posts[:]:
             if now >= post["time"]:
-                await app.bot.send_photo(
-                    chat_id=CHANNEL,
-                    photo=post["photo"],
-                    caption=post["caption"],
+                if len(post["photos"]) == 1:
+                    await app.bot.send_photo(
+                        chat_id=CHANNEL,
+                        photo=post["photos"][0],
+                        caption=post["caption"],
+                    )
+                else:
+                    media = [{"type": "photo", "media": p} for p in post["photos"]]
+                    media[0]["caption"] = post["caption"]
+                    await app.bot.send_media_group(CHANNEL, media)
+
+                await app.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=(
+                        "⏰ تم النشر حسب الجدولة\n"
+                        f"🖼️ عدد الصور: {len(post['photos'])}\n"
+                        f"🕒 وقت النشر: {datetime.now().strftime('%H:%M')}"
+                    ),
                 )
+
                 scheduled_posts.remove(post)
         await asyncio.sleep(10)
 
@@ -102,17 +97,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["photo"] = update.message.photo[-1].file_id
+    photos = context.user_data.get("photos", [])
+    photos.append(update.message.photo[-1].file_id)
+    context.user_data["photos"] = photos
 
     if update.message.caption and update.message.caption.strip():
         context.user_data["caption"] = update.message.caption
-        context.user_data["caption_type"] = "user"
     else:
         context.user_data["caption"] = random.choice(AUTO_CAPTIONS)
-        context.user_data["caption_type"] = "auto"
 
     await update.message.reply_text(
-        "📸 تم استلام الصورة\nاختر نشر الآن أو جدولة ⏰",
+        f"📸 تم استلام الصورة ({len(photos)})\nاختر نشر الآن أو جدولة ⏰",
         reply_markup=keyboard,
     )
 
@@ -121,41 +116,45 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # نشر الآن
     if text == "📤 نشر الآن":
-        if "photo" not in context.user_data:
-            await update.message.reply_text("❌ ماكو صورة جاهزة", reply_markup=keyboard)
+        photos = context.user_data.get("photos")
+        if not photos:
+            await update.message.reply_text("❌ ماكو صور جاهزة", reply_markup=keyboard)
             return
 
-        await context.bot.send_photo(
-            chat_id=CHANNEL,
-            photo=context.user_data["photo"],
-            caption=context.user_data["caption"],
-        )
+        caption = context.user_data["caption"]
 
-        caption_info = (
-            "✍️ كابشنك"
-            if context.user_data.get("caption_type") == "user"
-            else "🤖 كابشن تلقائي"
+        if len(photos) == 1:
+            await context.bot.send_photo(CHANNEL, photos[0], caption=caption)
+        else:
+            media = [{"type": "photo", "media": p} for p in photos]
+            media[0]["caption"] = caption
+            await context.bot.send_media_group(CHANNEL, media)
+
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "📤 تم النشر الفوري\n"
+                f"🖼️ عدد الصور: {len(photos)}\n"
+                f"🕒 وقت النشر: {datetime.now().strftime('%H:%M')}"
+            ),
         )
 
         context.user_data.clear()
-        await update.message.reply_text(
-            f"✅ تم النشر بنجاح\n{caption_info}",
-            reply_markup=keyboard,
-        )
+        await update.message.reply_text("✅ تم النشر بنجاح", reply_markup=keyboard)
         return
 
     # طلب جدولة
     if text == "⏰ جدولة":
-        await update.message.reply_text("✍️ اكتب الوقت بأي صيغة")
+        await update.message.reply_text("✍️ اكتب وقت النشر بأي صيغة")
         return
 
-    # إدخال وقت للجدولة
-    if "photo" in context.user_data:
+    # إدخال وقت الجدولة
+    if "photos" in context.user_data:
         t = parse_time(text)
         if t:
             scheduled_posts.append(
                 {
-                    "photo": context.user_data["photo"],
+                    "photos": context.user_data["photos"],
                     "caption": context.user_data["caption"],
                     "time": t,
                 }
@@ -179,7 +178,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg = "⏳ المنشورات المجدولة:\n"
             for p in scheduled_posts:
-                msg += f"- {p['time'].strftime('%H:%M')}\n"
+                msg += f"- {p['time'].strftime('%H:%M')} ({len(p['photos'])} صور)\n"
             await update.message.reply_text(msg, reply_markup=keyboard)
         return
 
