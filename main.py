@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta
 
 # ================== الإعدادات ==================
-TOKEN = "PUT_YOUR_TOKEN_HERE"
+TOKEN = "7813783471:AAH9snECiH7YbuO0dpIMjI4log_wP7B9LMw"
 CHANNEL = "@tajalnijomnjf"
 
 DATA_FILE = "scheduled_posts.json"
@@ -39,35 +39,28 @@ def extract_time(text):
     text = text.replace("مساءً", "م").replace("صباحاً", "ص")
     now = datetime.now()
 
-    # 15:30 أو 3:30
-    match = re.search(r'(\d{1,2}):(\d{2})', text)
-    if match:
-        h, m = map(int, match.groups())
-        t = now.replace(hour=h, minute=m, second=0)
-        return t if t > now else t + timedelta(days=1)
+    patterns = [
+        r'(\d{1,2}):(\d{2})',
+        r'(\d{1,2})\s*ونص',
+        r'(\d{1,2})\s*(م|ص)',
+        r'الساعة\s*(\d{1,2})'
+    ]
 
-    # 3 ونص
-    match = re.search(r'(\d{1,2})\s*ونص', text)
-    if match:
-        h = int(match.group(1))
-        t = now.replace(hour=h, minute=30, second=0)
-        return t if t > now else t + timedelta(days=1)
+    for p in patterns:
+        match = re.search(p, text)
+        if match:
+            if ":" in p:
+                h, m = map(int, match.groups())
+            elif "ونص" in p:
+                h, m = int(match.group(1)), 30
+            else:
+                h = int(match.group(1))
+                m = 0
+                if len(match.groups()) > 1 and match.group(2) == "م" and h < 12:
+                    h += 12
 
-    # 4 م / 10 ص
-    match = re.search(r'(\d{1,2})\s*(م|ص)', text)
-    if match:
-        h = int(match.group(1))
-        if match.group(2) == "م" and h < 12:
-            h += 12
-        t = now.replace(hour=h, minute=0, second=0)
-        return t if t > now else t + timedelta(days=1)
-
-    # الساعة 4
-    match = re.search(r'الساعة\s*(\d{1,2})', text)
-    if match:
-        h = int(match.group(1))
-        t = now.replace(hour=h, minute=0, second=0)
-        return t if t > now else t + timedelta(days=1)
+            t = now.replace(hour=h, minute=m, second=0)
+            return t if t > now else t + timedelta(days=1)
 
     return None
 
@@ -78,18 +71,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     post_time = extract_time(caption)
 
-    # إذا ماكو وقت → ينشر فوراً
+    # نشر فوري إذا ماكو وقت
     if not post_time:
-        caption_to_send = caption or AUTO_CAPTIONS[0]
         await context.bot.send_photo(
             chat_id=CHANNEL,
             photo=photo.file_id,
-            caption=caption_to_send
+            caption=caption or AUTO_CAPTIONS[0]
         )
         await update.message.reply_text("✅ تم النشر فوراً")
         return
 
-    # تنظيف الكابشن من الوقت
     clean_caption = re.sub(
         r'(\d{1,2}:\d{2}|\d+\s*ونص|\d+\s*(?:م|ص)|الساعة\s*\d+)',
         '',
@@ -107,7 +98,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_posts(scheduled_posts)
 
     await update.message.reply_text(
-        f"✅ تم جدولة الصورة\n🕒 وقت النشر: {post_time.strftime('%H:%M')}"
+        f"✅ تم جدولة الصورة\n🕒 {post_time.strftime('%H:%M')}"
     )
 
 # ================== النشر التلقائي ==================
@@ -125,12 +116,13 @@ async def scheduler(app):
                 save_posts(scheduled_posts)
         await asyncio.sleep(10)
 
-# ================== تشغيل البوت ==================
-async def main():
+# ================== التشغيل (مهم جداً لـ Render) ==================
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    asyncio.create_task(scheduler(app))
-    await app.run_polling()
+    app.job_queue.run_repeating(lambda _: None, interval=1)  # تهيئة
+    app.create_task(scheduler(app))
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
