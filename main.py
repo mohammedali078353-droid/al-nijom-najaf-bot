@@ -1,150 +1,136 @@
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 import asyncio
 import re
+import json
+import os
 from datetime import datetime, timedelta
 
 # ================== الإعدادات ==================
-TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
+TOKEN = "PUT_YOUR_TOKEN_HERE"
 CHANNEL = "@tajalnijomnjf"
-ADMIN_ID = 304764998
 
-# ================== كابشن ثابت ==================
-FIXED_CAPTION = "وصول بضاعه جديدة داخل الشركة متوفرة الان بكميات محدودة"
+DATA_FILE = "scheduled_posts.json"
 
-# ================== كيبورد ==================
-keyboard = ReplyKeyboardMarkup(
-    [["📤 نشر الآن", "⏰ جدولة"]],
-    resize_keyboard=True
-)
+AUTO_CAPTIONS = [
+    "وصول بضاعة جديدة داخل الشركة متوفرة الآن بكميات محدودة.",
+    "منتج عملي بجودة مضمونة، جاهز للتسليم.",
+    "الخيار الأمثل لأصحاب العمل الباحثين عن الاعتمادية.",
+]
 
-# ================== بدء البوت ==================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["photos"] = []
-    await update.message.reply_text(
-        "👋 أهلاً بك\n\n"
-        "📸 أرسل الصور الآن\n"
-        "⏰ أو حدد وقت بالنص مثل: 5:30\n"
-        "📤 أو اضغط (نشر الآن)",
-        reply_markup=keyboard
-    )
+# ================== الحفظ والتحميل ==================
+def save_posts(posts):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(posts, f, ensure_ascii=False, default=str)
+
+def load_posts():
+    if not os.path.exists(DATA_FILE):
+        return []
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        for p in data:
+            p["post_time"] = datetime.fromisoformat(p["post_time"])
+        return data
+
+scheduled_posts = load_posts()
+
+# ================== قراءة الوقت بأي صيغة ==================
+def extract_time(text):
+    text = text.replace("مساءً", "م").replace("صباحاً", "ص")
+    now = datetime.now()
+
+    # 15:30 أو 3:30
+    match = re.search(r'(\d{1,2}):(\d{2})', text)
+    if match:
+        h, m = map(int, match.groups())
+        t = now.replace(hour=h, minute=m, second=0)
+        return t if t > now else t + timedelta(days=1)
+
+    # 3 ونص
+    match = re.search(r'(\d{1,2})\s*ونص', text)
+    if match:
+        h = int(match.group(1))
+        t = now.replace(hour=h, minute=30, second=0)
+        return t if t > now else t + timedelta(days=1)
+
+    # 4 م / 10 ص
+    match = re.search(r'(\d{1,2})\s*(م|ص)', text)
+    if match:
+        h = int(match.group(1))
+        if match.group(2) == "م" and h < 12:
+            h += 12
+        t = now.replace(hour=h, minute=0, second=0)
+        return t if t > now else t + timedelta(days=1)
+
+    # الساعة 4
+    match = re.search(r'الساعة\s*(\d{1,2})', text)
+    if match:
+        h = int(match.group(1))
+        t = now.replace(hour=h, minute=0, second=0)
+        return t if t > now else t + timedelta(days=1)
+
+    return None
 
 # ================== استقبال الصور ==================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1].file_id
+    photo = update.message.photo[-1]
+    caption = update.message.caption or ""
 
-    if "photos" not in context.user_data:
-        context.user_data["photos"] = []
+    post_time = extract_time(caption)
 
-    context.user_data["photos"].append(photo)
-
-    await update.message.reply_text(
-        f"✅ تم استلام الصورة ({len(context.user_data['photos'])})"
-    )
-
-# ================== نشر الآن ==================
-async def publish_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photos = context.user_data.get("photos", [])
-
-    if not photos:
-        await update.message.reply_text("❌ لم يتم استلام أي صور")
-        return
-
-    for photo in photos:
+    # إذا ماكو وقت → ينشر فوراً
+    if not post_time:
+        caption_to_send = caption or AUTO_CAPTIONS[0]
         await context.bot.send_photo(
             chat_id=CHANNEL,
-            photo=photo,
-            caption=FIXED_CAPTION
+            photo=photo.file_id,
+            caption=caption_to_send
         )
-        await asyncio.sleep(1)
-
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"✅ تم نشر {len(photos)} صورة بنجاح"
-    )
-
-    context.user_data["photos"].clear()
-
-    await update.message.reply_text("✅ تم النشر بنجاح")
-
-# ================== جدولة ==================
-async def schedule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    match = re.search(r'(\d{1,2}):(\d{2})', text)
-    if not match:
-        await update.message.reply_text("❌ اكتب الوقت مثل 5:30")
+        await update.message.reply_text("✅ تم النشر فوراً")
         return
 
-    hour = int(match.group(1))
-    minute = int(match.group(2))
+    # تنظيف الكابشن من الوقت
+    clean_caption = re.sub(
+        r'(\d{1,2}:\d{2}|\d+\s*ونص|\d+\s*(?:م|ص)|الساعة\s*\d+)',
+        '',
+        caption
+    ).strip()
 
-    now = datetime.now()
-    publish_time = now.replace(hour=hour, minute=minute, second=0)
+    if not clean_caption:
+        clean_caption = AUTO_CAPTIONS[len(scheduled_posts) % len(AUTO_CAPTIONS)]
 
-    if publish_time < now:
-        publish_time += timedelta(days=1)
-
-    delay = (publish_time - now).total_seconds()
-
-    photos = context.user_data.get("photos", [])
-
-    if not photos:
-        await update.message.reply_text("❌ لا توجد صور مجدولة")
-        return
+    scheduled_posts.append({
+        "file_id": photo.file_id,
+        "caption": clean_caption,
+        "post_time": post_time
+    })
+    save_posts(scheduled_posts)
 
     await update.message.reply_text(
-        f"⏰ تم جدولة {len(photos)} صورة\n"
-        f"🕒 وقت النشر: {publish_time.strftime('%H:%M')}"
+        f"✅ تم جدولة الصورة\n🕒 وقت النشر: {post_time.strftime('%H:%M')}"
     )
 
-    asyncio.create_task(publish_later(context, photos.copy(), delay))
-
-    context.user_data["photos"].clear()
-
-# ================== نشر مؤجل ==================
-async def publish_later(context, photos, delay):
-    await asyncio.sleep(delay)
-
-    for photo in photos:
-        await context.bot.send_photo(
-            chat_id=CHANNEL,
-            photo=photo,
-            caption=FIXED_CAPTION
-        )
-        await asyncio.sleep(1)
-
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"⏰ تم نشر {len(photos)} صورة مجدولة بنجاح"
-    )
-
-# ================== أوامر نصية ==================
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if "نشر" in text:
-        await publish_now(update, context)
-    elif re.search(r'\d{1,2}:\d{2}', text):
-        await schedule_handler(update, context)
+# ================== النشر التلقائي ==================
+async def scheduler(app):
+    while True:
+        now = datetime.now()
+        for post in scheduled_posts[:]:
+            if now >= post["post_time"]:
+                await app.bot.send_photo(
+                    chat_id=CHANNEL,
+                    photo=post["file_id"],
+                    caption=post["caption"]
+                )
+                scheduled_posts.remove(post)
+                save_posts(scheduled_posts)
+        await asyncio.sleep(10)
 
 # ================== تشغيل البوت ==================
-def main():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    print("✅ البوت يعمل بنجاح...")
-    app.run_polling()
+    asyncio.create_task(scheduler(app))
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
