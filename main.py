@@ -1,27 +1,48 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 from datetime import datetime, timedelta
-import re
+import random
 import json
 import os
+import re
 
-# ================== الإعدادات (مهم) ==================
+# ================== الإعدادات الأساسية ==================
 TOKEN = "7813783471:AAEipNjiTWntDapCLN7Zz3HVuhKWL-UivUE"
-CHANNEL = "@tajalnijomnjf"   # لازم يكون معرف هنا
-ADMIN_ID = 304764998
+CHANNEL = "@tajalnijomnjf"
+
+ADMIN_ID = 304764998   # المدير الوحيد
+EMPLOYEES = set()      # أيدي الموظفين (تنضاف ديناميكياً)
 
 DATA_FILE = "scheduled_posts.json"
 
+# ================== كابشنات متغيرة (2025) ==================
 AUTO_CAPTIONS = [
-    "وصول بضاعة جديدة داخل الشركة متوفرة الآن بكميات محدودة.",
-    "منتج عملي بجودة مضمونة، جاهز للتسليم.",
-    "الخيار الأمثل لأصحاب العمل الباحثين عن الاعتمادية.",
+    "🔧 تجهيز حديث وبمواصفات قوية – متوفر الآن داخل الشركة.",
+    "⚙️ معدات أصلية بتشغيل مستقر واعتمادية عالية.",
+    "💪 حل عملي للأعمال الثقيلة والخفيفة – جاهز للتسليم.",
+    "🚜 أداء قوي يناسب العمل المستمر والضغط العالي.",
+    "🔋 كفاءة تشغيل عالية مع استهلاك محسوب.",
+    "🏗️ اختيار مثالي لأصحاب المشاريع والمقاولين.",
+    "📦 متوفر الآن بكميات محدودة – اطلبه قبل النفاد.",
+    "🛠️ جودة تصنيع عالية مع نتائج مضمونة.",
+    "⚡ قوة، ثبات، واعتمادية في جهاز واحد.",
+    "🔥 من التجهيزات المطلوبة لسنة 2025."
 ]
+
+last_caption = None
+
+def get_smart_caption():
+    global last_caption
+    options = [c for c in AUTO_CAPTIONS if c != last_caption]
+    caption = random.choice(options) if options else random.choice(AUTO_CAPTIONS)
+    last_caption = caption
+    return caption
 
 # ================== التخزين ==================
 def save_posts(posts):
@@ -38,68 +59,102 @@ def load_posts():
         return data
 
 scheduled_posts = load_posts()
+publishing_paused = False
 
-# ================== قراءة الوقت بأي صيغة ==================
+# ================== الصلاحيات ==================
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+def is_employee(user_id: int) -> bool:
+    return user_id == ADMIN_ID or user_id in EMPLOYEES
+
+# ================== قراءة الوقت ==================
 def extract_time(text):
-    text = text.replace("مساءً", "م").replace("صباحاً", "ص")
     now = datetime.now()
 
-    patterns = [
-        r'(\d{1,2}):(\d{2})',
-        r'(\d{1,2})\s*ونص',
-        r'(\d{1,2})\s*(م|ص)',
-        r'الساعة\s*(\d{1,2})'
-    ]
+    match = re.search(r'(\d{1,2}):(\d{2})', text)
+    if match:
+        h, m = map(int, match.groups())
+        t = now.replace(hour=h, minute=m, second=0)
+        return t if t > now else t + timedelta(days=1)
 
-    for p in patterns:
-        match = re.search(p, text)
-        if match:
-            if ":" in p:
-                h, m = map(int, match.groups())
-            elif "ونص" in p:
-                h, m = int(match.group(1)), 30
-            else:
-                h = int(match.group(1))
-                m = 0
-                if len(match.groups()) > 1 and match.group(2) == "م" and h < 12:
-                    h += 12
+    match = re.search(r'(\d{1,2})\s*ونص', text)
+    if match:
+        h = int(match.group(1))
+        t = now.replace(hour=h, minute=30, second=0)
+        return t if t > now else t + timedelta(days=1)
 
-            t = now.replace(hour=h, minute=m, second=0)
-            return t if t > now else t + timedelta(days=1)
+    match = re.search(r'(\d{1,2})\s*(م|ص)', text)
+    if match:
+        h = int(match.group(1))
+        if match.group(2) == "م" and h < 12:
+            h += 12
+        t = now.replace(hour=h, minute=0, second=0)
+        return t if t > now else t + timedelta(days=1)
 
     return None
 
+# ================== الكيبورد الرئيسي ==================
+def main_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 نشر الآن", callback_data="publish_now"),
+            InlineKeyboardButton("📋 عرض المجدول", callback_data="list_schedule"),
+        ],
+        [
+            InlineKeyboardButton("❌ إلغاء آخر جدولة", callback_data="cancel_last"),
+            InlineKeyboardButton("♻️ تغيير الكابشن", callback_data="change_caption"),
+        ],
+        [
+            InlineKeyboardButton("⏸️ إيقاف النشر", callback_data="pause"),
+            InlineKeyboardButton("▶️ تشغيل النشر", callback_data="resume"),
+        ],
+        [
+            InlineKeyboardButton("📊 تقرير اليوم", callback_data="daily_report"),
+            InlineKeyboardButton("👤 إضافة موظف", callback_data="add_employee"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ إعدادات", callback_data="settings"),
+        ]
+    ])
+
 # ================== استقبال الصور ==================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_employee(user_id):
+        return
+
     photo = update.message.photo[-1]
     caption = update.message.caption or ""
 
     post_time = extract_time(caption)
 
-    # نشر فوري إذا ماكو وقت
     if not post_time:
+        # نشر فوري
+        smart_caption = caption if caption.strip() else get_smart_caption()
         await context.bot.send_photo(
             chat_id=CHANNEL,
             photo=photo.file_id,
-            caption=caption or AUTO_CAPTIONS[0]
+            caption=smart_caption
         )
-        await update.message.reply_text("✅ تم النشر فوراً")
+        await update.message.reply_text("✅ تم النشر فوراً", reply_markup=main_keyboard())
 
+        # تقرير للمدير فقط
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text="📤 نشر فوري\n🖼️ صورة بدون جدولة"
+            text="📤 تقرير نشر\nتم نشر صورة فوراً بنجاح."
         )
         return
 
-    # تنظيف الكابشن من الوقت
     clean_caption = re.sub(
-        r'(\d{1,2}:\d{2}|\d+\s*ونص|\d+\s*(?:م|ص)|الساعة\s*\d+)',
+        r'(\d{1,2}:\d{2}|\d+\s*ونص|\d+\s*(?:م|ص))',
         '',
         caption
     ).strip()
 
     if not clean_caption:
-        clean_caption = AUTO_CAPTIONS[len(scheduled_posts) % len(AUTO_CAPTIONS)]
+        clean_caption = get_smart_caption()
 
     scheduled_posts.append({
         "file_id": photo.file_id,
@@ -109,11 +164,80 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_posts(scheduled_posts)
 
     await update.message.reply_text(
-        f"✅ تم جدولة الصورة\n🕒 وقت النشر: {post_time.strftime('%H:%M')}"
+        f"⏰ تم جدولة الصورة\n🕒 {post_time.strftime('%H:%M')}",
+        reply_markup=main_keyboard()
     )
+
+# ================== أزرار التحكم ==================
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global publishing_paused
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    if not is_employee(user_id):
+        return
+
+    if query.data == "pause":
+        publishing_paused = True
+        await query.edit_message_text("⏸️ تم إيقاف النشر مؤقتاً")
+
+    elif query.data == "resume":
+        publishing_paused = False
+        await query.edit_message_text("▶️ تم تشغيل النشر")
+
+    elif query.data == "list_schedule":
+        if not scheduled_posts:
+            await query.edit_message_text("📋 ماكو منشورات مجدولة حالياً")
+        else:
+            text = "📋 المنشورات المجدولة:\n"
+            for i, p in enumerate(scheduled_posts, 1):
+                text += f"{i}) {p['post_time'].strftime('%H:%M')}\n"
+            await query.edit_message_text(text)
+
+    elif query.data == "cancel_last":
+        if scheduled_posts:
+            scheduled_posts.pop()
+            save_posts(scheduled_posts)
+            await query.edit_message_text("❌ تم إلغاء آخر جدولة")
+        else:
+            await query.edit_message_text("❌ ماكو شي للإلغاء")
+
+    elif query.data == "change_caption":
+        await query.edit_message_text(f"♻️ كابشن جديد:\n{get_smart_caption()}")
+
+    elif query.data == "daily_report" and is_admin(user_id):
+        await query.edit_message_text(
+            f"📊 تقرير اليوم\n"
+            f"📌 مجدول حالياً: {len(scheduled_posts)} منشور"
+        )
+
+    elif query.data == "add_employee" and is_admin(user_id):
+        context.user_data["await_employee_id"] = True
+        await query.edit_message_text("✏️ دز ID الموظف لإضافته")
+
+# ================== إضافة موظف ==================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_admin(user_id):
+        return
+
+    if context.user_data.get("await_employee_id"):
+        try:
+            emp_id = int(update.message.text.strip())
+            EMPLOYEES.add(emp_id)
+            context.user_data["await_employee_id"] = False
+            await update.message.reply_text(f"✅ تم إضافة الموظف ID: {emp_id}")
+        except:
+            await update.message.reply_text("❌ ID غير صحيح")
 
 # ================== فحص الجدولة ==================
 async def check_schedule(context: ContextTypes.DEFAULT_TYPE):
+    if publishing_paused:
+        return
+
     now = datetime.now()
     for post in scheduled_posts[:]:
         if now >= post["post_time"]:
@@ -123,13 +247,10 @@ async def check_schedule(context: ContextTypes.DEFAULT_TYPE):
                 caption=post["caption"]
             )
 
+            # تقرير للمدير فقط
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=(
-                    "📊 تقرير نشر\n"
-                    f"🕒 {post['post_time'].strftime('%H:%M')}\n"
-                    "✅ تم النشر بنجاح"
-                )
+                text="📊 تقرير نشر\n✅ تم نشر منشور مجدول بنجاح"
             )
 
             scheduled_posts.remove(post)
@@ -140,6 +261,8 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
     app.job_queue.run_repeating(check_schedule, interval=10, first=5)
 
