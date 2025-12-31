@@ -1,14 +1,19 @@
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
-import asyncio
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+from datetime import datetime, timedelta
 import re
 import json
 import os
-from datetime import datetime, timedelta
 
 # ================== الإعدادات ==================
 TOKEN = "7813783471:AAH9snECiH7YbuO0dpIMjI4log_wP7B9LMw"
 CHANNEL = "@tajalnijomnjf"
+ADMIN_ID = 304764998   # غيّر إذا تحب
 
 DATA_FILE = "scheduled_posts.json"
 
@@ -18,7 +23,7 @@ AUTO_CAPTIONS = [
     "الخيار الأمثل لأصحاب العمل الباحثين عن الاعتمادية.",
 ]
 
-# ================== الحفظ والتحميل ==================
+# ================== التخزين ==================
 def save_posts(posts):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, default=str)
@@ -71,7 +76,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     post_time = extract_time(caption)
 
-    # نشر فوري إذا ماكو وقت
+    # نشر فوري
     if not post_time:
         await context.bot.send_photo(
             chat_id=CHANNEL,
@@ -79,8 +84,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=caption or AUTO_CAPTIONS[0]
         )
         await update.message.reply_text("✅ تم النشر فوراً")
+
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="📤 نشر فوري\n🖼️ صورة بدون جدولة"
+        )
         return
 
+    # تنظيف الكابشن من الوقت
     clean_caption = re.sub(
         r'(\d{1,2}:\d{2}|\d+\s*ونص|\d+\s*(?:م|ص)|الساعة\s*\d+)',
         '',
@@ -101,27 +112,38 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ تم جدولة الصورة\n🕒 {post_time.strftime('%H:%M')}"
     )
 
-# ================== النشر التلقائي ==================
-async def scheduler(app):
-    while True:
-        now = datetime.now()
-        for post in scheduled_posts[:]:
-            if now >= post["post_time"]:
-                await app.bot.send_photo(
-                    chat_id=CHANNEL,
-                    photo=post["file_id"],
-                    caption=post["caption"]
-                )
-                scheduled_posts.remove(post)
-                save_posts(scheduled_posts)
-        await asyncio.sleep(10)
+# ================== فحص الجدولة (JobQueue) ==================
+async def check_schedule(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now()
+    for post in scheduled_posts[:]:
+        if now >= post["post_time"]:
+            await context.bot.send_photo(
+                chat_id=CHANNEL,
+                photo=post["file_id"],
+                caption=post["caption"]
+            )
 
-# ================== التشغيل (مهم جداً لـ Render) ==================
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "📊 تقرير نشر\n"
+                    f"🕒 {post['post_time'].strftime('%H:%M')}\n"
+                    "✅ تم النشر بنجاح"
+                )
+            )
+
+            scheduled_posts.remove(post)
+            save_posts(scheduled_posts)
+
+# ================== التشغيل ==================
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.job_queue.run_repeating(lambda _: None, interval=1)  # تهيئة
-    app.create_task(scheduler(app))
+
+    # JobQueue هي الحل الصحيح
+    app.job_queue.run_repeating(check_schedule, interval=10, first=5)
+
     app.run_polling()
 
 if __name__ == "__main__":
