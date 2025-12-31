@@ -11,8 +11,7 @@ import json
 import os
 
 # ================== الإعدادات ==================
-TOKEN = "7813783471:AAH9snECiH7YbuO0dpIMjI4log_wP7B9LMw"
-CHANNEL = "@tajalnijomnjf"
+TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
 ADMIN_ID = 304764998   # غيّر إذا تحب
 
 DATA_FILE = "scheduled_posts.json"
