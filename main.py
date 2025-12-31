@@ -10,9 +10,10 @@ import re
 import json
 import os
 
-# ================== الإعدادات ==================
+# ================== الإعدادات (مهم) ==================
 TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
-ADMIN_ID = 304764998   # غيّر إذا تحب
+CHANNEL = "@tajalnijomnjf"   # لازم يكون معرف هنا
+ADMIN_ID = 304764998
 
 DATA_FILE = "scheduled_posts.json"
 
@@ -75,7 +76,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     post_time = extract_time(caption)
 
-    # نشر فوري
+    # نشر فوري إذا ماكو وقت
     if not post_time:
         await context.bot.send_photo(
             chat_id=CHANNEL,
@@ -108,10 +109,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_posts(scheduled_posts)
 
     await update.message.reply_text(
-        f"✅ تم جدولة الصورة\n🕒 {post_time.strftime('%H:%M')}"
+        f"✅ تم جدولة الصورة\n🕒 وقت النشر: {post_time.strftime('%H:%M')}"
     )
 
-# ================== فحص الجدولة (JobQueue) ==================
+# ================== فحص الجدولة ==================
 async def check_schedule(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     for post in scheduled_posts[:]:
@@ -140,7 +141,6 @@ def main():
 
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    # JobQueue هي الحل الصحيح
     app.job_queue.run_repeating(check_schedule, interval=10, first=5)
 
     app.run_polling()
