@@ -11,7 +11,7 @@ import json
 import os
 
 # ================== الإعدادات (مهم) ==================
-TOKEN = "7813783471:AAEtUMHRB18_eJjMtOs0cIOeUijSi8QDQa8"
+TOKEN = "7813783471:AAEipNjiTWntDapCLN7Zz3HVuhKWL-UivUE"
 CHANNEL = "@tajalnijomnjf"   # لازم يكون معرف هنا
 ADMIN_ID = 304764998
 
